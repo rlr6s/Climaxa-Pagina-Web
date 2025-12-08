@@ -1,5 +1,6 @@
 <?php
-include("backend/db.php");
+require_once("config/database.php");
+$conn = getDBConnection();
 
 echo "<h2>Estructura de la Base de Datos CLIMAXA</h2>";
 
