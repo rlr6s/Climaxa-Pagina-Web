@@ -2,6 +2,14 @@
 // admin/estadisticas.php
 require_once('includes/header.php');
 
+require_once('includes/funciones.php');
+
+// Verificar si se solicita exportación
+if (isset($_GET['export']) && $_GET['export'] == 'excel') {
+    exportarEstadisticasExcel();
+    exit;
+}
+
 $anio_actual = date('Y');
 $anio_seleccionado = isset($_GET['anio']) ? intval($_GET['anio']) : $anio_actual;
 $ventas_por_mes = obtenerVentasPorMes($anio_seleccionado);
@@ -108,9 +116,9 @@ $ventas_por_mes = obtenerVentasPorMes($anio_seleccionado);
                     </option>
                     <?php endfor; ?>
                 </select>
-                <button class="btn btn-primary btn-sm" onclick="exportChart()">
-                    <i class="fas fa-download"></i> Exportar
-                </button>
+                <a href="?export=excel&anio=<?php echo $anio_seleccionado; ?>" class="btn btn-primary btn-sm">
+                    <i class="fas fa-file-excel"></i> Exportar Excel
+                </a>
             </div>
         </div>
         <canvas id="salesChart" height="100"></canvas>
@@ -121,8 +129,8 @@ $ventas_por_mes = obtenerVentasPorMes($anio_seleccionado);
         <div class="monthly-breakdown">
             <div class="table-header">
                 <h3>Desglose Mensual</h3>
-                <a href="#" onclick="exportMonthlyData()" class="view-all">
-                    <i class="fas fa-download"></i> Exportar Excel
+                <a href="?export=excel&anio=<?php echo $anio_seleccionado; ?>" class="view-all">
+                    <i class="fas fa-file-excel"></i> Exportar Excel
                 </a>
             </div>
             <div class="table-responsive">

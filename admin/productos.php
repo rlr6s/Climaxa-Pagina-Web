@@ -2,8 +2,24 @@
 // admin/productos.php
 require_once('includes/header.php');
 
+// OBTENER PARÁMETROS DE BÚSQUEDA
+$search = $_GET['search'] ?? '';
+$category = $_GET['category'] ?? '';
+$stock_filter = $_GET['stock'] ?? '';
 $pagina = isset($_GET['pagina']) ? (int)$_GET['pagina'] : 1;
-$resultados = obtenerProductosAdmin($pagina, 20);
+
+function getPaginationUrl($page) {
+    global $search, $category, $stock_filter;
+    $params = [];
+    if ($search) $params[] = "search=" . urlencode($search);
+    if ($category) $params[] = "category=" . urlencode($category);
+    if ($stock_filter) $params[] = "stock=" . urlencode($stock_filter);
+    $params[] = "pagina=" . $page;
+    return "?" . implode('&', $params);
+}
+
+// Usar la función con filtros
+$resultados = obtenerProductosAdmin($pagina, 20, $search, $category, $stock_filter);
 
 $productos = $resultados['productos'];
 $total_paginas = $resultados['total_paginas'];
@@ -27,37 +43,53 @@ $pagina_actual = $resultados['pagina_actual'];
         </div>
     </div>
     
-    <!-- Filters -->
-    <div class="filters">
-        <div class="search-box">
-            <input type="text" id="search-products" placeholder="Buscar productos...">
-            <i class="fas fa-search"></i>
-        </div>
-        
-        <div class="filter-options">
-            <select id="filter-category">
-                <option value="">Todas las categorías</option>
-                <option value="aires">Aires Acondicionados</option>
-                <option value="freezers">Freezers</option>
-                <option value="neveras">Neveras</option>
-                <option value="servicios">Servicios</option>
-            </select>
-            
-            <select id="filter-stock">
-                <option value="">Todo el stock</option>
-                <option value="low">Stock bajo (< 5)</option>
-                <option value="out">Sin stock</option>
-                <option value="in">En stock</option>
-            </select>
-            
-            <button class="btn btn-filter" id="apply-filters">
-                <i class="fas fa-filter"></i> Filtrar
-            </button>
-            <button class="btn btn-clear" id="clear-filters">
-                <i class="fas fa-times"></i> Limpiar
-            </button>
-        </div>
+   <!-- Filters -->
+<div class="filters">
+    <div class="search-box">
+        <input type="text" id="search-products" 
+               placeholder="Buscar productos..." 
+               value="<?php echo htmlspecialchars($search); ?>">
+        <i class="fas fa-search"></i>
     </div>
+    
+    <div class="filter-options">
+        <select id="filter-category">
+            <option value="">Todas las categorías</option>
+            <option value="aires" <?php echo $category == 'aires' ? 'selected' : ''; ?>>
+                Aires Acondicionados
+            </option>
+            <option value="freezers" <?php echo $category == 'freezers' ? 'selected' : ''; ?>>
+                Freezers
+            </option>
+            <option value="neveras" <?php echo $category == 'neveras' ? 'selected' : ''; ?>>
+                Neveras
+            </option>
+            <option value="servicios" <?php echo $category == 'servicios' ? 'selected' : ''; ?>>
+                Servicios
+            </option>
+        </select>
+        
+        <select id="filter-stock">
+            <option value="">Todo el stock</option>
+            <option value="low" <?php echo $stock_filter == 'low' ? 'selected' : ''; ?>>
+                Stock bajo (< 5)
+            </option>
+            <option value="out" <?php echo $stock_filter == 'out' ? 'selected' : ''; ?>>
+                Sin stock
+            </option>
+            <option value="in" <?php echo $stock_filter == 'in' ? 'selected' : ''; ?>>
+                En stock
+            </option>
+        </select>
+        
+        <button class="btn btn-filter" id="apply-filters">
+            <i class="fas fa-filter"></i> Filtrar
+        </button>
+        <button class="btn btn-clear" id="clear-filters">
+            <i class="fas fa-times"></i> Limpiar
+        </button>
+    </div>
+</div>
     
     <!-- Products Table -->
     <div class="table-container">
@@ -153,8 +185,8 @@ $pagina_actual = $resultados['pagina_actual'];
         <?php if ($total_paginas > 1): ?>
         <div class="pagination">
             <?php if ($pagina_actual > 1): ?>
-            <a href="?pagina=1" class="page-link first">« Primera</a>
-            <a href="?pagina=<?php echo $pagina_actual - 1; ?>" class="page-link prev">‹ Anterior</a>
+           <a href="<?php echo getPaginationUrl(1); ?>" class="page-link first">« Primera</a>
+           <a href="<?php echo getPaginationUrl($pagina_actual - 1); ?>" class="page-link prev">‹ Anterior</a>
             <?php endif; ?>
             
             <?php 
@@ -163,15 +195,15 @@ $pagina_actual = $resultados['pagina_actual'];
             
             for ($i = $inicio; $i <= $fin; $i++):
             ?>
-            <a href="?pagina=<?php echo $i; ?>" 
-               class="page-link <?php echo $i == $pagina_actual ? 'active' : ''; ?>">
+           <a href="<?php echo getPaginationUrl($i); ?>" 
+              class="page-link <?php echo $i == $pagina_actual ? 'active' : ''; ?>">
                 <?php echo $i; ?>
             </a>
             <?php endfor; ?>
             
             <?php if ($pagina_actual < $total_paginas): ?>
-            <a href="?pagina=<?php echo $pagina_actual + 1; ?>" class="page-link next">Siguiente ›</a>
-            <a href="?pagina=<?php echo $total_paginas; ?>" class="page-link last">Última »</a>
+            <a href="<?php echo getPaginationUrl($pagina_actual + 1); ?>" class="page-link next">Siguiente ›</a>
+            <a href="<?php echo getPaginationUrl($total_paginas); ?>" class="page-link last">Última »</a>
             <?php endif; ?>
         </div>
         <?php endif; ?>
@@ -349,10 +381,50 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Filtros y búsqueda
-    document.getElementById('search-products').addEventListener('input', function() {
+    // Filtros y búsqueda - VERSIÓN MEJORADA
+let searchTimeout;
+
+document.getElementById('search-products').addEventListener('input', function() {
+    clearTimeout(searchTimeout);
+    
+    // Buscar inmediatamente si está vacío
+    if (this.value.length === 0) {
         buscarProductos();
-    });
+        return;
+    }
+    
+    // Esperar al menos 2 caracteres
+    if (this.value.length < 2) {
+        return;
+    }
+    
+    // Esperar 1 segundo después de escribir
+    searchTimeout = setTimeout(() => {
+        buscarProductos();
+    }, 1000);
+});
+
+// Buscar con Enter
+document.getElementById('search-products').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        clearTimeout(searchTimeout);
+        buscarProductos();
+    }
+});
+
+// Botón Filtrar
+document.getElementById('apply-filters').addEventListener('click', function() {
+    clearTimeout(searchTimeout);
+    buscarProductos();
+});
+
+// Botón Limpiar
+document.getElementById('clear-filters').addEventListener('click', function() {
+    document.getElementById('search-products').value = '';
+    document.getElementById('filter-category').value = '';
+    document.getElementById('filter-stock').value = '';
+    buscarProductos();
+});
     
     document.getElementById('apply-filters').addEventListener('click', buscarProductos);
     

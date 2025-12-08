@@ -165,15 +165,60 @@ function eliminarUsuario($usuario_id) {
     return $success;
 }
 
-// Obtener todos los productos con paginación
-function obtenerProductosAdmin($pagina = 1, $por_pagina = 20) {
+function obtenerProductosAdmin($pagina = 1, $por_pagina = 20, $search = '', $category = '', $stock_filter = '') {
     $conn = getAdminDBConnection();
     
     $offset = ($pagina - 1) * $por_pagina;
     
-    $sql = "SELECT * FROM productos ORDER BY id DESC LIMIT ? OFFSET ?";
+    // CONSTRUIR CONSULTA CON FILTROS
+    $where = [];
+    $params = [];
+    $param_types = '';
+    
+    if (!empty($search)) {
+        $where[] = "(nombre LIKE ? OR marca LIKE ? OR descripcion LIKE ?)";
+        $search_term = "%$search%";
+        $params[] = $search_term;
+        $params[] = $search_term;
+        $params[] = $search_term;
+        $param_types .= 'sss';
+    }
+    
+    if (!empty($category)) {
+        $where[] = "categoria = ?";
+        $params[] = $category;
+        $param_types .= 's';
+    }
+    
+    if (!empty($stock_filter)) {
+        switch ($stock_filter) {
+            case 'low':
+                $where[] = "stock < 5 AND stock > 0";
+                break;
+            case 'out':
+                $where[] = "stock = 0";
+                break;
+            case 'in':
+                $where[] = "stock > 0";
+                break;
+        }
+    }
+    
+    $sql_where = '';
+    if (!empty($where)) {
+        $sql_where = 'WHERE ' . implode(' AND ', $where);
+    }
+    
+    // OBTENER PRODUCTOS
+    $sql = "SELECT * FROM productos $sql_where ORDER BY id DESC LIMIT ? OFFSET ?";
+    $params[] = $por_pagina;
+    $params[] = $offset;
+    $param_types .= 'ii';
+    
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $por_pagina, $offset);
+    if (!empty($params)) {
+        $stmt->bind_param($param_types, ...$params);
+    }
     $stmt->execute();
     $result = $stmt->get_result();
     
@@ -182,12 +227,26 @@ function obtenerProductosAdmin($pagina = 1, $por_pagina = 20) {
         $productos[] = $row;
     }
     
-    // Obtener total de productos para paginación
-    $sql_total = "SELECT COUNT(*) as total FROM productos";
-    $result_total = $conn->query($sql_total);
+    // OBTENER TOTAL (con los mismos filtros)
+    $sql_total = "SELECT COUNT(*) as total FROM productos $sql_where";
+    $stmt_total = $conn->prepare($sql_total);
+    
+    if (!empty($where)) {
+        $count_params = array_slice($params, 0, count($params) - 2);
+        $count_types = substr($param_types, 0, -2);
+        if (!empty($count_params)) {
+            $stmt_total->bind_param($count_types, ...$count_params);
+        }
+    }
+    
+    $stmt_total->execute();
+    $result_total = $stmt_total->get_result();
     $total = $result_total->fetch_assoc()['total'];
     
     $stmt->close();
+    if (isset($stmt_total)) {
+        $stmt_total->close();
+    }
     
     return [
         'productos' => $productos,
@@ -195,6 +254,11 @@ function obtenerProductosAdmin($pagina = 1, $por_pagina = 20) {
         'pagina_actual' => $pagina,
         'total_paginas' => ceil($total / $por_pagina)
     ];
+}
+
+function obtenerProductosConFiltros($pagina = 1, $por_pagina = 20, $search = '', $category = '', $stock_filter = '') {
+    // Reutilizar la función modificada
+    return obtenerProductosAdmin($pagina, $por_pagina, $search, $category, $stock_filter);
 }
 
 // Crear nuevo producto
@@ -464,4 +528,186 @@ function cerrarConexiones() {
     // La conexión se cerrará automáticamente al final del script
     // No es necesario hacer nada aquí
 }
+
+function exportarEstadisticasExcel() {
+    $conn = getAdminDBConnection();
+    
+    // Obtener el año de los parámetros GET o usar el actual
+    $anio_seleccionado = isset($_GET['anio']) ? intval($_GET['anio']) : date('Y');
+    $ventas_por_mes = obtenerVentasPorMes($anio_seleccionado);
+    
+    // Obtener productos más vendidos
+    $productos_mas_vendidos = obtenerProductosMasVendidos(20);
+    
+    // Configurar headers para Excel
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="estadisticas_climaxa_' . date('Y-m-d') . '.xls"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    
+    // Nombres de meses
+    $nombres_meses = [
+        1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
+        5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+        9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
+    ];
+    
+    // ========== CREAR ARCHIVO EXCEL ==========
+    echo "<html>";
+    echo "<head>";
+    echo "<meta charset='UTF-8'>";
+    echo "<style>";
+    echo "table { border-collapse: collapse; width: 100%; }";
+    echo "th { background-color: #4CAF50; color: white; padding: 8px; text-align: left; }";
+    echo "td { padding: 8px; border: 1px solid #ddd; }";
+    echo ".total-row { background-color: #f2f2f2; font-weight: bold; }";
+    echo ".title { font-size: 18px; font-weight: bold; margin-bottom: 20px; }";
+    echo ".section-title { font-size: 16px; font-weight: bold; margin-top: 30px; color: #2196F3; }";
+    echo "</style>";
+    echo "</head>";
+    echo "<body>";
+    
+    // Título principal
+    echo "<div class='title'>Reporte de Estadísticas - CLIMAXA</div>";
+    echo "<div>Año: " . $anio_seleccionado . "</div>";
+    echo "<div>Fecha de generación: " . date('d/m/Y H:i:s') . "</div>";
+    echo "<br>";
+    
+    // ========== SECCIÓN 1: RESUMEN ANUAL ==========
+    echo "<div class='section-title'>1. Resumen Anual " . $anio_seleccionado . "</div>";
+    echo "<table border='1'>";
+    echo "<tr>";
+    echo "<th>Indicador</th>";
+    echo "<th>Valor</th>";
+    echo "</tr>";
+    
+    // Calcular totales
+    $total_ventas = 0;
+    $total_pedidos = 0;
+    foreach ($ventas_por_mes as $mes) {
+        $total_ventas += $mes['total_ventas'];
+        $total_pedidos += $mes['total_pedidos'];
+    }
+    $valor_promedio = $total_pedidos > 0 ? $total_ventas / $total_pedidos : 0;
+    
+    // Mes con más ventas
+    $mes_max = 0;
+    $ventas_max = 0;
+    foreach ($ventas_por_mes as $mes => $datos) {
+        if ($datos['total_ventas'] > $ventas_max) {
+            $ventas_max = $datos['total_ventas'];
+            $mes_max = $mes;
+        }
+    }
+    
+    echo "<tr><td>Ventas Totales</td><td>RD$ " . number_format($total_ventas, 2) . "</td></tr>";
+    echo "<tr><td>Pedidos Totales</td><td>" . number_format($total_pedidos) . "</td></tr>";
+    echo "<tr><td>Valor Promedio por Pedido</td><td>RD$ " . number_format($valor_promedio, 2) . "</td></tr>";
+    echo "<tr><td>Mes con Más Ventas</td><td>" . ($nombres_meses[$mes_max] ?? 'N/A') . " (RD$ " . number_format($ventas_max, 2) . ")</td></tr>";
+    echo "<tr><td>Promedio Mensual de Pedidos</td><td>" . number_format($total_pedidos / 12, 1) . "</td></tr>";
+    
+    echo "</table>";
+    
+    // ========== SECCIÓN 2: DESGLOSE MENSUAL ==========
+    echo "<br>";
+    echo "<div class='section-title'>2. Desglose Mensual " . $anio_seleccionado . "</div>";
+    echo "<table border='1'>";
+    echo "<tr>";
+    echo "<th>Mes</th>";
+    echo "<th>Pedidos</th>";
+    echo "<th>Ventas (RD$)</th>";
+    echo "<th>Promedio por Pedido</th>";
+    echo "<th>Tendencia</th>";
+    echo "</tr>";
+    
+    $mes_anterior = 0;
+    foreach ($ventas_por_mes as $mes => $datos) {
+        $promedio = $datos['total_pedidos'] > 0 ? $datos['total_ventas'] / $datos['total_pedidos'] : 0;
+        
+        // Calcular tendencia
+        $tendencia = '=';
+        if ($mes_anterior > 0) {
+            if ($datos['total_ventas'] > $mes_anterior) {
+                $tendencia = '↑';
+            } elseif ($datos['total_ventas'] < $mes_anterior) {
+                $tendencia = '↓';
+            }
+        }
+        $mes_anterior = $datos['total_ventas'];
+        
+        echo "<tr>";
+        echo "<td>" . $nombres_meses[$mes] . "</td>";
+        echo "<td>" . $datos['total_pedidos'] . "</td>";
+        echo "<td>RD$ " . number_format($datos['total_ventas'], 2) . "</td>";
+        echo "<td>RD$ " . number_format($promedio, 2) . "</td>";
+        echo "<td>" . $tendencia . "</td>";
+        echo "</tr>";
+    }
+    
+    // Total
+    echo "<tr class='total-row'>";
+    echo "<td><strong>Total</strong></td>";
+    echo "<td><strong>" . number_format($total_pedidos) . "</strong></td>";
+    echo "<td><strong>RD$ " . number_format($total_ventas, 2) . "</strong></td>";
+    echo "<td><strong>RD$ " . number_format($valor_promedio, 2) . "</strong></td>";
+    echo "<td></td>";
+    echo "</tr>";
+    
+    echo "</table>";
+    
+    // ========== SECCIÓN 3: PRODUCTOS MÁS VENDIDOS ==========
+    echo "<br>";
+    echo "<div class='section-title'>3. Productos Más Vendidos " . $anio_seleccionado . "</div>";
+    
+    if (!empty($productos_mas_vendidos)) {
+        // Calcular total de ingresos
+        $total_ingresos_productos = 0;
+        foreach ($productos_mas_vendidos as $producto) {
+            $total_ingresos_productos += $producto['ingresos_totales'];
+        }
+        
+        echo "<table border='1'>";
+        echo "<tr>";
+        echo "<th>#</th>";
+        echo "<th>Producto</th>";
+        echo "<th>Marca</th>";
+        echo "<th>Categoría</th>";
+        echo "<th>Unidades Vendidas</th>";
+        echo "<th>Ingresos (RD$)</th>";
+        echo "<th>% del Total</th>";
+        echo "</tr>";
+        
+        $contador = 1;
+        foreach ($productos_mas_vendidos as $producto) {
+            $porcentaje = $total_ingresos_productos > 0 ? ($producto['ingresos_totales'] / $total_ingresos_productos * 100) : 0;
+            
+            echo "<tr>";
+            echo "<td>" . $contador++ . "</td>";
+            echo "<td>" . htmlspecialchars($producto['nombre']) . "</td>";
+            echo "<td>" . htmlspecialchars($producto['marca']) . "</td>";
+            echo "<td>" . htmlspecialchars($producto['categoria'] ?? 'General') . "</td>";
+            echo "<td>" . $producto['total_vendido'] . "</td>";
+            echo "<td>RD$ " . number_format($producto['ingresos_totales'], 2) . "</td>";
+            echo "<td>" . number_format($porcentaje, 1) . "%</td>";
+            echo "</tr>";
+        }
+        
+        // Total productos
+        echo "<tr class='total-row'>";
+        echo "<td colspan='4'><strong>Total</strong></td>";
+        echo "<td><strong>" . array_sum(array_column($productos_mas_vendidos, 'total_vendido')) . "</strong></td>";
+        echo "<td><strong>RD$ " . number_format($total_ingresos_productos, 2) . "</strong></td>";
+        echo "<td><strong>100%</strong></td>";
+        echo "</tr>";
+        
+        echo "</table>";
+    } else {
+        echo "<p>No hay datos de productos vendidos para este período.</p>";
+    }
+    
+    echo "</body>";
+    echo "</html>";
+    exit;
+}
+
 ?>
